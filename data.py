@@ -1,14 +1,16 @@
 import logging
 import math
 
+import os
 import numpy as np
 from PIL import Image
+import torch
 from torchvision import datasets
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 
 from augmentation import RandAugmentCIFAR
-from augment import TrivialAugmentWide
+#from augment import TrivialAugmentWide
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +18,8 @@ cifar10_mean = (0.491400, 0.482158, 0.4465231)
 cifar10_std = (0.247032, 0.243485, 0.2615877)
 cifar100_mean = (0.507075, 0.486549, 0.440918)
 cifar100_std = (0.267334, 0.256438, 0.276151)
+voc12_mean = (0.485, 0.456, 0.406)
+voc12_std = (0.229, 0.224, 0.225)
 normal_mean = (0.5, 0.5, 0.5)
 normal_std = (0.5, 0.5, 0.5)
 
@@ -109,7 +113,7 @@ def get_cifar100(args):
     )
     finetune_dataset = CIFAR100SSL(
         args.data_path, finetune_idxs, train=True,
-        transform=transform_fintune
+        transform=transform_finetune
     )
     train_unlabeled_dataset = CIFAR100SSL(
         args.data_path, train_unlabeled_idxs, train=True,
@@ -118,6 +122,58 @@ def get_cifar100(args):
 
     test_dataset = datasets.CIFAR100(args.data_path, train=False,
                                      transform=transform_val, download=False)
+
+    return train_labeled_dataset, train_unlabeled_dataset, test_dataset, finetune_dataset
+
+
+def get_voc12(args):
+    if args.randaug:
+        n, m = args.randaug
+    else:
+        n, m = 2, 10  # default
+    transform_labeled = transforms.Compose([
+        transforms.Resize(size=(args.resize,args.resize)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomCrop(size=args.resize,
+                              padding=int(args.resize * 0.125),
+                              fill=128,
+                              padding_mode='constant'),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=voc12_mean, std=voc12_std)])
+    transform_finetune = transforms.Compose([
+        transforms.Resize(size=(args.resize,args.resize)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomCrop(size=args.resize,
+                              padding=int(args.resize * 0.125),
+                              fill=128,
+                              padding_mode='constant'),
+        RandAugmentCIFAR(n=n, m=m),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=voc12_mean, std=voc12_std)])
+
+    transform_val = transforms.Compose([
+        transforms.Resize(size=(args.resize,args.resize)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=voc12_mean, std=voc12_std)])
+
+    #base_dataset = datasets.CIFAR100(args.data_path, train=True, download=True)
+    #train_labeled_idxs, train_unlabeled_idxs, finetune_idxs = x_u_split(args, base_dataset.targets)
+
+    train_labeled_dataset = VOC12(
+        root=args.data_path, year='2012', image_set='train', dataset_list=args.list_labeled,
+        transform=transform_labeled, download=False
+    )
+    finetune_dataset = VOC12(
+        root=args.data_path, year='2012', image_set='train', dataset_list=args.list_labeled,
+        transform=transform_finetune, download=False
+    )
+    train_unlabeled_dataset = VOC12(
+        root=args.data_path, year='2012', image_set='train', dataset_list=args.list_unlabeled,
+        transform=TransformMPL(args, mean=voc12_mean, std=voc12_std), download=False
+    )
+
+    test_dataset = VOC12(args.data_path, year='2012', image_set='val', dataset_list=args.list_unlabeled,
+                         transform=transform_val, download=False)
 
     return train_labeled_dataset, train_unlabeled_dataset, test_dataset, finetune_dataset
 
@@ -144,7 +200,7 @@ def x_u_split(args, labels):
         return labeled_idx_ex, unlabeled_idx, labeled_idx
     else:
         np.random.shuffle(labeled_idx)
-        return labeled_idx, unlabeled_idx, lebeled_idx
+        return labeled_idx, unlabeled_idx, labeled_idx
 
 
 def x_u_split_test(args, labels):
@@ -179,12 +235,14 @@ class TransformMPL(object):
             n, m = 2, 10  # default
 
         self.ori = transforms.Compose([
+            transforms.Resize(size=(args.resize,args.resize)),
             transforms.RandomHorizontalFlip(),
             transforms.RandomCrop(size=args.resize,
                                   padding=int(args.resize * 0.125),
                                   fill=128,
                                   padding_mode='constant')])
         self.aug = transforms.Compose([
+            transforms.Resize(size=(args.resize,args.resize)),
             transforms.RandomHorizontalFlip(),
             transforms.RandomCrop(size=args.resize,
                                   padding=int(args.resize * 0.125),
@@ -192,6 +250,7 @@ class TransformMPL(object):
                                   padding_mode='constant'),
             RandAugmentCIFAR(n=n, m=m)])
         self.normalize = transforms.Compose([
+            transforms.Resize(size=(args.resize,args.resize)),
             transforms.ToTensor(),
             transforms.Normalize(mean=mean, std=std)])
 
@@ -251,5 +310,46 @@ class CIFAR100SSL(datasets.CIFAR100):
         return img, target
 
 
+class VOC12(datasets.VOCDetection):
+    def __init__(self, *args, **kwargs):
+        # Init
+        self.dataset_list = kwargs['dataset_list']
+        kwargs.pop('dataset_list', None)
+        super(VOC12, self).__init__(*args, **kwargs)
+
+        self.voc_class = ["background","aeroplane","bicycle","bird","boat","bottle","bus","car","cat","chair","cow",
+                          "diningtable","dog","horse","motorbike","person","pottedplant","sheep","sofa","train","tvmonitor"]
+        self.voc_class_num = len(self.voc_class)
+        
+        # directory initialization
+        image_dir = os.path.split(self.images[0])[0]
+        annotation_dir = os.path.join(os.path.dirname(image_dir), 'Annotations')
+
+        # read list of train_aug
+        with open(self.dataset_list, 'r') as f:
+            data = f.read().split()
+        # replace train into train_aug(images, annotations)
+        self.images = [os.path.join(image_dir, x + ".jpg") for x in data]
+        
+        # Re-append xml file list
+        self.annotations.clear()
+        for x in data:
+            self.annotations.append(os.path.join(annotation_dir, x + ".xml"))
+            
+    def __getitem__(self, index):
+        img, ann = super().__getitem__(index)
+        
+        # get object list
+        objects = ann['annotation']['object']
+        # get unique classes
+        ann = torch.LongTensor(list({self.voc_class.index(o['name'])-1 for o in objects}))
+        # make one-hot encoding
+        one_hot = torch.zeros(self.voc_class_num-1)
+        one_hot[ann] = 1
+
+        return img, one_hot
+
+
 DATASET_GETTERS = {'cifar10': get_cifar10,
-                   'cifar100': get_cifar100}
+                   'cifar100': get_cifar100,
+                   'voc12': get_voc12}

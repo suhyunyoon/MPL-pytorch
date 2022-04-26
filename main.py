@@ -30,9 +30,14 @@ parser.add_argument('--name', type=str, required=True, help='experiment name')
 parser.add_argument('--data-path', default='./data', type=str, help='data path')
 parser.add_argument('--save-path', default='./checkpoint', type=str, help='save path')
 parser.add_argument('--dataset', default='cifar10', type=str,
-                    choices=['cifar10', 'cifar100'], help='dataset name')
+                    choices=['cifar10', 'cifar100', 'voc12'], help='dataset name')
+
 parser.add_argument('--num-labeled', type=int, default=4000, help='number of labeled data')
+parser.add_argument('--list_labeled', type=str, help='text file of labeled data list (voc12)')
+parser.add_argument('--list_unlabeled', type=str, help='text file of labeled data list (voc12)')
+parser.add_argument('--list_val', type=str, help='text file of labeled data list (voc12)')
 parser.add_argument("--expand-labels", action="store_true", help="expand labels to fit eval steps")
+
 parser.add_argument('--total-steps', default=300000, type=int, help='number of total steps to run')
 parser.add_argument('--eval-step', default=1000, type=int, help='number of eval steps to run')
 parser.add_argument('--start-step', default=0, type=int,
@@ -41,6 +46,7 @@ parser.add_argument('--workers', default=4, type=int, help='number of workers')
 parser.add_argument('--num-classes', default=10, type=int, help='number of classes')
 parser.add_argument('--resize', default=32, type=int, help='resize image')
 parser.add_argument('--batch-size', default=64, type=int, help='train batch size')
+
 parser.add_argument('--teacher-dropout', default=0, type=float, help='dropout on last dense layer')
 parser.add_argument('--student-dropout', default=0, type=float, help='dropout on last dense layer')
 parser.add_argument('--teacher_lr', default=0.01, type=float, help='train learning late')
@@ -54,6 +60,7 @@ parser.add_argument('--student-wait-steps', default=0, type=int, help='warmup st
 parser.add_argument('--grad-clip', default=1e9, type=float, help='gradient norm clipping')
 parser.add_argument('--resume', default='', type=str, help='path to checkpoint')
 parser.add_argument('--evaluate', action='store_true', help='only evaluate model on validation set')
+
 parser.add_argument('--finetune', action='store_true',
                     help='only finetune model on labeled dataset')
 parser.add_argument('--finetune-epochs', default=625, type=int, help='finetune epochs')
@@ -61,6 +68,7 @@ parser.add_argument('--finetune-batch-size', default=512, type=int, help='finetu
 parser.add_argument('--finetune-lr', default=3e-5, type=float, help='finetune learning late')
 parser.add_argument('--finetune-weight-decay', default=0, type=float, help='finetune weight decay')
 parser.add_argument('--finetune-momentum', default=0.9, type=float, help='finetune SGD Momentum')
+
 parser.add_argument('--seed', default=None, type=int, help='seed for initializing training')
 parser.add_argument('--label-smoothing', default=0, type=float, help='label smoothing alpha')
 parser.add_argument('--mu', default=7, type=int, help='coefficient of unlabeled batch size')
@@ -168,6 +176,12 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
         images_uw = images_uw.to(args.device)
         images_us = images_us.to(args.device)
         targets = targets.to(args.device)
+
+        print('images_l:', images_l.size())
+        print('images_uw:', images_uw.size())
+        print('images_us:', images_us.size())
+        print('targets:', targets.size())
+
         with amp.autocast(enabled=args.amp):
             batch_size = images_l.shape[0]
             t_images = torch.cat((images_l, images_uw, images_us))
@@ -349,8 +363,10 @@ def evaluate(args, test_loader, model, criterion):
             with amp.autocast(enabled=args.amp):
                 outputs = model(images)
                 loss = criterion(outputs, targets)
-
-            acc1, acc5 = accuracy(outputs, targets, (1, 5))
+            if args.dataset == 'voc12': # Unable topk in multi-label
+                acc1 = accuracy(outputs, targets, (1,))
+            else:
+                acc1, acc5 = accuracy(outputs, targets, (1, 5))
             losses.update(loss.item(), batch_size)
             top1.update(acc1[0], batch_size)
             top5.update(acc5[0], batch_size)
@@ -514,6 +530,8 @@ def main():
     if args.dataset == "cifar10":
         depth, widen_factor = 28, 2
     elif args.dataset == 'cifar100':
+        depth, widen_factor = 28, 8
+    elif args.dataset == 'voc12':
         depth, widen_factor = 28, 8
 
     if args.local_rank not in [-1, 0]:
