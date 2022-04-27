@@ -172,7 +172,7 @@ def get_voc12(args):
         transform=TransformMPL(args, mean=voc12_mean, std=voc12_std), download=False
     )
 
-    test_dataset = VOC12(args.data_path, year='2012', image_set='val', dataset_list=args.list_unlabeled,
+    test_dataset = VOC12(args.data_path, year='2012', image_set='val', dataset_list=args.list_val,
                          transform=transform_val, download=False)
 
     return train_labeled_dataset, train_unlabeled_dataset, test_dataset, finetune_dataset

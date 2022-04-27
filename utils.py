@@ -3,6 +3,8 @@ import os
 import shutil
 from collections import OrderedDict
 
+import numpy as np
+
 import torch
 from torch import distributed as dist
 from torch import nn
@@ -75,6 +77,57 @@ def accuracy(output, target, topk=(1,)):
         correct_k = correct[:k].reshape(-1).float().sum(dim=0, keepdim=True)
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
+
+
+def accuracy_multilabel(output, target):
+    output = output.to(torch.device('cpu'))
+    target = target.to(torch.device('cpu'))
+    maxk = max(topk)
+    batch_size = target.shape[0]
+
+    _, idx = output.sort(dim=1, descending=True)
+    pred = idx.narrow(1, 0, maxk).t()
+    correct = pred.eq(target.reshape(1, -1).expand_as(pred))
+
+    res = []
+    for k in topk:
+        correct_k = correct[:k].reshape(-1).float().sum(dim=0, keepdim=True)
+        res.append(correct_k.mul_(100.0 / batch_size))
+    return res
+
+
+def average_precision(pred, label):
+    epsilon = 1e-8
+    pred, label = pred.detach().cpu().numpy(), label.detach().cpu().numpy()
+    # sort examples
+    indices = pred.argsort()[::-1]
+    # Computes prec@i
+    total_count_ = np.cumsum(np.ones((len(pred), 1)))
+
+    label_ = label[indices]
+    ind = label_ == 1
+    pos_count_ = np.cumsum(ind)
+    total = pos_count_[-1]
+    pos_count_[np.logical_not(ind)] = 0
+    pp = pos_count_ / total_count_
+    precision_at_i_ = np.sum(pp)
+    precision_at_i = precision_at_i_ / (total + epsilon)
+
+    return precision_at_i
+
+
+def AP(label, logit):
+    if np.size(logit) == 0:
+        return 0
+    ap = np.zeros((logit.shape[1]))
+    # compute average precision for each class
+    for k in range(logit.shape[1]):
+        # sort scores
+        logits = logit[:, k]
+        preds = label[:, k]
+        
+        ap[k] = average_precision(logits, preds)
+    return ap
 
 
 class SmoothCrossEntropy(nn.Module):

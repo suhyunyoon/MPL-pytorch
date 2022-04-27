@@ -20,7 +20,7 @@ from tqdm import tqdm
 
 from data import DATASET_GETTERS
 from models import WideResNet, ModelEMA
-from utils import (AverageMeter, accuracy, create_loss_fn,
+from utils import (AverageMeter, accuracy, create_loss_fn, AP,
                    save_checkpoint, reduce_tensor, model_load_state_dict)
 
 logger = logging.getLogger(__name__)
@@ -173,18 +173,20 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
         data_time.update(time.time() - end)
 
         images_l = images_l.to(args.device)
-        images_uw = images_uw.to(args.device)
-        images_us = images_us.to(args.device)
+        # images_uw = images_uw.to(args.device)
+        # images_us = images_us.to(args.device)
         targets = targets.to(args.device)
 
-        print('images_l:', images_l.size())
-        print('images_uw:', images_uw.size())
-        print('images_us:', images_us.size())
-        print('targets:', targets.size())
+        # print('images_l:', images_l.size())
+        # print('images_uw:', images_uw.size())
+        # print('images_us:', images_us.size())
+        # print('targets:', targets.size())
 
         with amp.autocast(enabled=args.amp):
             batch_size = images_l.shape[0]
-            t_images = torch.cat((images_l, images_uw, images_us))
+            #t_images = torch.cat((images_l, images_uw, images_us))
+            t_images = images_l
+
             t_logits = teacher_model(t_images)
             t_logits_l = t_logits[:batch_size]
             t_logits_uw, t_logits_us = t_logits[batch_size:].chunk(2)
@@ -201,7 +203,9 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
             weight_u = args.lambda_u * min(1., (step + 1) / args.uda_steps)
             t_loss_uda = t_loss_l + weight_u * t_loss_u
 
-            s_images = torch.cat((images_l, images_us))
+            #s_images = torch.cat((images_l, images_us))
+            s_images = images_l
+
             s_logits = student_model(s_images)
             s_logits_l = s_logits[:batch_size]
             s_logits_us = s_logits[batch_size:]
@@ -364,12 +368,15 @@ def evaluate(args, test_loader, model, criterion):
                 outputs = model(images)
                 loss = criterion(outputs, targets)
             if args.dataset == 'voc12': # Unable topk in multi-label
-                acc1 = accuracy(outputs, targets, (1,))
+                #acc1 = accuracy(outputs, targets, (1,))
+                # map
+                acc1 = [AP(targets, outputs).mean()]
+                top5.update(0, batch_size)
             else:
                 acc1, acc5 = accuracy(outputs, targets, (1, 5))
+                top5.update(acc5[0], batch_size)
             losses.update(loss.item(), batch_size)
             top1.update(acc1[0], batch_size)
-            top5.update(acc5[0], batch_size)
             batch_time.update(time.time() - end)
             end = time.time()
             test_iter.set_description(
