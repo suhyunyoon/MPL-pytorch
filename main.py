@@ -173,8 +173,8 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
         data_time.update(time.time() - end)
 
         images_l = images_l.to(args.device)
-        # images_uw = images_uw.to(args.device)
-        # images_us = images_us.to(args.device)
+        images_uw = images_uw.to(args.device)
+        images_us = images_us.to(args.device)
         targets = targets.to(args.device)
 
         # print('images_l:', images_l.size())
@@ -184,8 +184,8 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
 
         with amp.autocast(enabled=args.amp):
             batch_size = images_l.shape[0]
-            #t_images = torch.cat((images_l, images_uw, images_us))
-            t_images = images_l
+            t_images = torch.cat((images_l, images_uw, images_us))
+            #t_images = images_l
 
             t_logits = teacher_model(t_images)
             t_logits_l = t_logits[:batch_size]
@@ -203,8 +203,8 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
             weight_u = args.lambda_u * min(1., (step + 1) / args.uda_steps)
             t_loss_uda = t_loss_l + weight_u * t_loss_u
 
-            #s_images = torch.cat((images_l, images_us))
-            s_images = images_l
+            s_images = torch.cat((images_l, images_us))
+            #s_images = images_l
 
             s_logits = student_model(s_images)
             s_logits_l = s_logits[:batch_size]
